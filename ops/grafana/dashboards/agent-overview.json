@@ -1,0 +1,14 @@
+{
+  "title": "Local-AI — Agent Overview",
+  "uid": "agent-overview",
+  "schemaVersion": 39,
+  "refresh": "10s",
+  "panels": [
+    {"type": "timeseries", "title": "Requests/sec", "targets": [{"expr": "rate(agent_requests_total[1m])"}], "gridPos": {"x": 0, "y": 0, "w": 12, "h": 8}},
+    {"type": "timeseries", "title": "Latency p50/p95/p99", "targets": [{"expr": "histogram_quantile(0.5, rate(agent_latency_seconds_bucket[5m]))"}, {"expr": "histogram_quantile(0.95, rate(agent_latency_seconds_bucket[5m]))"}, {"expr": "histogram_quantile(0.99, rate(agent_latency_seconds_bucket[5m]))"}], "gridPos": {"x": 12, "y": 0, "w": 12, "h": 8}},
+    {"type": "timeseries", "title": "Guardrail blocks", "targets": [{"expr": "rate(agent_guardrail_blocks_total[5m])"}], "gridPos": {"x": 0, "y": 8, "w": 12, "h": 8}},
+    {"type": "timeseries", "title": "Check fails", "targets": [{"expr": "rate(agent_check_fails_total[5m])"}], "gridPos": {"x": 12, "y": 8, "w": 12, "h": 8}},
+    {"type": "timeseries", "title": "Cost (USD/min)", "targets": [{"expr": "rate(agent_request_cost_usd_sum[5m])"}], "gridPos": {"x": 0, "y": 16, "w": 12, "h": 8}},
+    {"type": "timeseries", "title": "Circuit breaker state", "targets": [{"expr": "rate(agent_circuit_state_total[5m])"}], "gridPos": {"x": 12, "y": 16, "w": 12, "h": 8}}
+  ]
+}

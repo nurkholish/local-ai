@@ -1,0 +1,58 @@
+_format_version: "3.0"
+
+services:
+  - name: agent-api
+    url: http://api:8080
+    retries: 3
+    connect_timeout: 10000
+    read_timeout: 180000
+    write_timeout: 180000
+    routes:
+      - name: agent-chat
+        paths:
+          - /v1/chat
+          - /v1/chat/stream
+          - /v1/documents
+          - /v1/conversations
+        strip_path: false
+      - name: agent-health
+        paths:
+          - /healthz
+          - /readyz
+        strip_path: false
+    plugins:
+      - name: cors
+        config:
+          origins: ["http://localhost:3001", "http://127.0.0.1:3001", "http://localhost:5173"]
+          methods: [GET, POST, OPTIONS, PUT, DELETE]
+          headers: [Content-Type, x-api-key, Authorization, x-trace-id]
+          exposed_headers: [x-trace-id, x-latency-ms]
+          credentials: true
+          max_age: 3600
+          preflight_continue: false
+      - name: key-auth
+        config:
+          key_names: [x-api-key]
+          hide_credentials: true
+      - name: rate-limiting
+        config:
+          minute: 120
+          policy: local
+          fault_tolerant: true
+      - name: prometheus
+      - name: correlation-id
+        config:
+          header_name: x-trace-id
+          generator: uuid
+          echo_downstream: true
+      - name: opentelemetry
+        config:
+          endpoint: http://otel-collector:4317
+
+consumers:
+  - username: dev
+    keyauth_credentials:
+      - key: dev-key
+  - username: prod
+    keyauth_credentials:
+      - key: change-me-prod

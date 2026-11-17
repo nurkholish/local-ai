@@ -1,0 +1,55 @@
+services:
+  api:
+    environment:
+      VLLM_ENABLED: "true"
+      LLM_ROUTE_MODE: ${LLM_ROUTE_MODE:-hybrid}
+    deploy:
+      replicas: 2
+      resources:
+        limits: { cpus: "1.0", memory: 512M }
+
+  frontend:
+    build:
+      args:
+        VITE_API_URL: ${VITE_API_URL:-/api}
+        VITE_PROMETHEUS_URL: ${VITE_PROMETHEUS_URL:-/prom}
+        VITE_API_KEY: ${VITE_API_KEY:-change-me-prod}
+
+  vllm-router:
+    build: { context: docker/vllm }
+    environment:
+      MODEL_ID: ${LLM_ROUTE_CLASSIFIER_MODEL:-Qwen/Qwen2.5-1.5B-Instruct}
+      PORT: 8001
+      GPU_MEMORY_UTIL: "0.3"
+      MAX_MODEL_LEN: "4096"
+      QUANTIZATION: awq
+    deploy:
+      resources:
+        reservations:
+          devices: [{ driver: nvidia, count: 1, capabilities: [gpu] }]
+    ports: ["8001:8001"]
+
+  vllm-main:
+    build: { context: docker/vllm }
+    environment:
+      MODEL_ID: ${LLM_ROUTE_LOCAL_MODEL:-Qwen/Qwen2.5-7B-Instruct-AWQ}
+      PORT: 8002
+      GPU_MEMORY_UTIL: "0.5"
+      MAX_MODEL_LEN: "8192"
+      QUANTIZATION: awq
+    deploy:
+      resources:
+        reservations:
+          devices: [{ driver: nvidia, count: 1, capabilities: [gpu] }]
+    ports: ["8002:8002"]
+
+  embedding:
+    build: { context: docker/embedding }
+    environment:
+      MODEL_ID: BAAI/bge-m3
+      PORT: 8003
+    deploy:
+      resources:
+        reservations:
+          devices: [{ driver: nvidia, count: 1, capabilities: [gpu] }]
+    ports: ["8003:8003"]

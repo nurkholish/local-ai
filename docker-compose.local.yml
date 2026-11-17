@@ -1,0 +1,17 @@
+services:
+  api:
+    environment:
+      VLLM_ENABLED: "true"
+      VLLM_ROUTER_URL: "http://host.docker.internal:11434/v1"
+      VLLM_MAIN_URL: "http://host.docker.internal:11434/v1"
+      LLM_ROUTE_CLASSIFIER_MODEL: "qwen2.5:1.5b"
+      LLM_ROUTE_LOCAL_MODEL: "qwen2.5:3b"
+      LLM_ROUTE_MODE: "local"
+      LLM_TIMEOUT_S: "90"
+      LLM_MAX_RETRIES: "1"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  kong:
+    environment:
+      KONG_LOG_LEVEL: debug

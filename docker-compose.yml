@@ -1,0 +1,214 @@
+name: local-ai
+
+x-common-env: &common-env
+  ENV: ${ENV:-local}
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  LOG_JSON: ${LOG_JSON:-true}
+  REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+  DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://agent:agent@postgres:5432/agent}
+  OTEL_ENABLED: ${OTEL_ENABLED:-true}
+  OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4317}
+  OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-local-ai-api}
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: docker/api/Dockerfile
+    env_file: [.env]
+    environment:
+      <<: *common-env
+      PORT: ${PORT:-8080}
+      LLM_ROUTE_MODE: ${LLM_ROUTE_MODE:-hybrid}
+      LLM_MAX_RETRIES: ${LLM_MAX_RETRIES:-2}
+      LLM_TIMEOUT_S: ${LLM_TIMEOUT_S:-30}
+      LLM_MAX_OUTPUT_TOKENS: ${LLM_MAX_OUTPUT_TOKENS:-512}
+      LLM_CACHE_PROMPT: ${LLM_CACHE_PROMPT:-true}
+      LLM_EARLY_RETURN_CALCULATOR: ${LLM_EARLY_RETURN_CALCULATOR:-true}
+      LLM_STREAMING_ENABLED: ${LLM_STREAMING_ENABLED:-true}
+      LLM_FALLBACK_ENABLED: ${LLM_FALLBACK_ENABLED:-true}
+      LLM_ROUTE_CLASSIFIER_MODEL: ${LLM_ROUTE_CLASSIFIER_MODEL:-Qwen/Qwen2.5-1.5B-Instruct}
+      LLM_ROUTE_LOCAL_MODEL: ${LLM_ROUTE_LOCAL_MODEL:-Qwen/Qwen2.5-7B-Instruct-AWQ}
+      LLM_ROUTE_FRONTIER_MODEL: ${LLM_ROUTE_FRONTIER_MODEL:-gpt-4o-mini}
+      CB_FAILURE_THRESHOLD: ${CB_FAILURE_THRESHOLD:-5}
+      CB_RECOVERY_TIMEOUT_S: ${CB_RECOVERY_TIMEOUT_S:-30}
+      RETRY_BUDGET_S: ${RETRY_BUDGET_S:-120}
+      RETRY_MAX_ATTEMPTS: ${RETRY_MAX_ATTEMPTS:-3}
+      PII_REDACTION_ENABLED: ${PII_REDACTION_ENABLED:-true}
+      PII_REDACTION_ON_OUTPUT: ${PII_REDACTION_ON_OUTPUT:-true}
+      DEDUP_ENABLED: ${DEDUP_ENABLED:-true}
+      VLLM_ENABLED: ${VLLM_ENABLED:-false}
+      VLLM_ROUTER_URL: ${VLLM_ROUTER_URL:-http://vllm-router:8001/v1}
+      VLLM_MAIN_URL: ${VLLM_MAIN_URL:-http://vllm-main:8002/v1}
+      EMBEDDING_URL: ${EMBEDDING_URL:-http://embedding:8003}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      MAX_AGENT_STEPS: ${MAX_AGENT_STEPS:-8}
+      MAX_HISTORY_TURNS: ${MAX_HISTORY_TURNS:-10}
+      MAX_RAG_CHUNKS: ${MAX_RAG_CHUNKS:-5}
+      TOOL_TIMEOUT_S: ${TOOL_TIMEOUT_S:-15}
+      RATE_LIMIT_PER_MIN: ${RATE_LIMIT_PER_MIN:-60}
+    ports:
+      - "8080:8080"
+    depends_on:
+      redis: { condition: service_healthy }
+      postgres: { condition: service_healthy }
+      otel-collector: { condition: service_started }
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=2).status == 200 else 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+  kong:
+    image: kong:3.9.1
+    environment:
+      KONG_DATABASE: "off"
+      KONG_DECLARATIVE_CONFIG: /usr/local/kong/declarative/kong.yml
+      KONG_PROXY_ACCESS_LOG: /dev/stdout
+      KONG_ADMIN_ACCESS_LOG: /dev/stdout
+      KONG_PROXY_ERROR_LOG: /dev/stderr
+      KONG_ADMIN_ERROR_LOG: /dev/stderr
+      KONG_ADMIN_LISTEN: 0.0.0.0:8001
+      KONG_PROXY_LISTEN: 0.0.0.0:8000
+      KONG_LOG_LEVEL: info
+      KONG_PLUGINS: bundled
+    volumes:
+      - ./ops/kong/kong.yml:/usr/local/kong/declarative/kong.yml:ro
+    ports:
+      - "${KONG_PROXY_PORT:-8000}:8000"
+      - "${KONG_ADMIN_PORT:-8001}:8001"
+    depends_on:
+      api: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "kong", "health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"]
+    volumes: ["redis-data:/data"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: agent
+      POSTGRES_PASSWORD: agent
+      POSTGRES_DB: agent
+    volumes: ["pg-data:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agent"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.104.0
+    command: ["--config=/etc/otel/config.yml"]
+    volumes:
+      - ./ops/otel-collector/config.yml:/etc/otel/config.yml:ro
+    ports:
+      - "4317:4317"
+      - "4318:4318"
+      - "8889:8889"
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    volumes:
+      - ./ops/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    ports: ["9090:9090"]
+    restart: unless-stopped
+
+  loki:
+    image: grafana/loki:2.9.8
+    command: ["-config.file=/etc/loki/config.yml"]
+    volumes:
+      - ./ops/loki/config.yml:/etc/loki/config.yml:ro
+      - loki-data:/loki
+    ports: ["3100:3100"]
+    restart: unless-stopped
+
+  promtail:
+    image: grafana/promtail:2.9.8
+    command: ["-config.file=/etc/promtail/config.yml"]
+    volumes:
+      - ./ops/promtail/config.yml:/etc/promtail/config.yml:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      - loki
+    restart: unless-stopped
+
+  tempo:
+    image: grafana/tempo:2.5.0
+    command: ["-config.file=/etc/tempo/tempo.yml"]
+    volumes:
+      - ./ops/tempo/tempo.yml:/etc/tempo/tempo.yml:ro
+      - tempo-data:/var/tempo
+    ports: ["3200:3200"]
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:10.4.5
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_SECURITY_DISABLE_INITIAL_ADMIN_PASSWORD_CHANGE: "true"
+      GF_DATABASE_WAL_ENABLED: "true"
+      GF_DATABASE_CACHE_MODE: "private"
+      GF_DATABASE_TIMEOUT: "30"
+    volumes:
+      - ./ops/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./ops/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports: ["3000:3000"]
+    depends_on:
+      - prometheus
+      - loki
+      - tempo
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_URL: ${VITE_API_URL:-}
+        VITE_PROMETHEUS_URL: ${VITE_PROMETHEUS_URL:-}
+        VITE_API_KEY: ${VITE_API_KEY:-}
+    ports:
+      - "3001:80"
+    depends_on:
+      kong: { condition: service_healthy }
+      prometheus: { condition: service_started }
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  redis-data:
+  pg-data:
+  prometheus-data:
+  loki-data:
+  tempo-data:
+  grafana-data:
